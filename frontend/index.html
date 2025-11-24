@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STL Sprue Generator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 30px;
+        }
+
+        .panel {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+        }
+
+        .panel h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: white;
+        }
+
+        .upload-area:hover {
+            background: #f0f4ff;
+            border-color: #764ba2;
+        }
+
+        .upload-area.dragover {
+            background: #e8edff;
+            border-color: #764ba2;
+        }
+
+        .upload-icon {
+            font-size: 4em;
+            margin-bottom: 15px;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin: 5px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .canvas-container {
+            width: 100%;
+            height: 500px;
+            border-radius: 10px;
+            overflow: hidden;
+            background: #1a1a1a;
+            position: relative;
+        }
+
+        #canvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        .info-panel {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .info-item:last-child {
+            border-bottom: none;
+        }
+
+        .info-label {
+            font-weight: 600;
+            color: #666;
+        }
+
+        .info-value {
+            color: #333;
+        }
+
+        .controls {
+            margin-top: 20px;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #666;
+            font-weight: 500;
+        }
+
+        .control-group input,
+        .control-group select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 1em;
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            display: none;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        .status.show {
+            display: block;
+        }
+
+        .downloads {
+            margin-top: 20px;
+        }
+
+        .download-item {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border: 2px solid #e9ecef;
+        }
+
+        .download-item:hover {
+            border-color: #667eea;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 1024px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎯 STL Sprue Generator</h1>
+            <p>Автоматическое разбиение 3D-моделей на детали для литникового литья</p>
+        </div>
+
+        <div class="content">
+            <div class="panel">
+                <h2>📤 Загрузка модели</h2>
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📁</div>
+                    <p><strong>Перетащите STL файл сюда</strong></p>
+                    <p>или</p>
+                    <button class="btn" onclick="document.getElementById('fileInput').click()">
+                        Выбрать файл
+                    </button>
+                    <input type="file" id="fileInput" class="file-input" accept=".stl" />
+                </div>
+
+                <div class="status" id="status"></div>
+
+                <div class="info-panel" id="fileInfo" style="display: none;">
+                    <div class="info-item">
+                        <span class="info-label">Файл:</span>
+                        <span class="info-value" id="fileName">-</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Вершин:</span>
+                        <span class="info-value" id="vertexCount">-</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Граней:</span>
+                        <span class="info-value" id="faceCount">-</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Объем:</span>
+                        <span class="info-value" id="volume">-</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Размер X:</span>
+                        <span class="info-value" id="sizeX">-</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Размер Y:</span>
+                        <span class="info-value" id="sizeY">-</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Размер Z:</span>
+                        <span class="info-value" id="sizeZ">-</span>
+                    </div>
+                </div>
+
+                <div class="controls" id="controls" style="display: none;">
+                    <h2 style="margin-top: 20px;">⚙️ Параметры</h2>
+                    
+                    <div class="control-group">
+                        <label>Масштаб модели (x):</label>
+                        <input type="number" id="scaleInput" value="1.0" min="0.01" max="1000" step="0.1" />
+                        <small style="color: #666; display: block; margin-top: 5px;">Введите значение масштаба (например, 500 для увеличения в 500 раз)</small>
+                    </div>
+
+                    <div class="control-group">
+                        <label>Количество частей:</label>
+                        <input type="number" id="numParts" value="4" min="2" max="10" />
+                    </div>
+
+                    <div class="control-group">
+                        <label>Толщина стенок деталей (мм):</label>
+                        <input type="number" id="wallThickness" value="1.0" min="0.5" max="5" step="0.1" />
+                    </div>
+
+                    <button class="btn" id="segmentBtn" onclick="segmentModel()">
+                        🔍 Разбить модель
+                    </button>
+
+                    <button class="btn" id="generateBtn" onclick="generateSprue()" disabled>
+                        🔧 Сгенерировать спрусы
+                    </button>
+                </div>
+
+                <div class="downloads" id="downloads" style="display: none;">
+                    <h2 style="margin-top: 20px;">📥 Скачать детали</h2>
+                    <div id="downloadList"></div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>👁️ 3D Предпросмотр</h2>
+                <div class="canvas-container">
+                    <canvas id="canvas"></canvas>
+                </div>
+                <div style="margin-top: 15px; text-align: center;">
+                    <button class="btn btn-secondary" onclick="resetView()">🔄 Сбросить вид</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // STLLoader
+        class STLLoader {
+            load(url, onLoad, onProgress, onError) {
+                const loader = new THREE.FileLoader();
+                loader.setResponseType('arraybuffer');
+                loader.load(url, (buffer) => {
+                    try {
+                        const geometry = this.parse(buffer);
+                        onLoad(geometry);
+                    } catch (e) {
+                        if (onError) onError(e);
+                    }
+                }, onProgress, onError);
+            }
+            parse(data) {
+                const isBinary = data.byteLength > 84 && new TextDecoder().decode(data.slice(0, 5)) !== 'solid';
+                if (isBinary) {
+                    return this.parseBinary(data);
+                } else {
+                    return this.parseASCII(data);
+                }
+            }
+            parseBinary(data) {
+                const reader = new DataView(data);
+                const faces = reader.getUint32(80, true);
+                const dataOffset = 84;
+                const faceLength = 12 * 4 + 2;
+                const geometry = new THREE.BufferGeometry();
+                const vertices = [];
+                const normals = [];
+                for (let face = 0; face < faces; face++) {
+                    const start = dataOffset + face * faceLength;
+                    const normalX = reader.getFloat32(start, true);
+                    const normalY = reader.getFloat32(start + 4, true);
+                    const normalZ = reader.getFloat32(start + 8, true);
+                    for (let i = 1; i <= 3; i++) {
+                        const vertexstart = start + i * 12;
+                        vertices.push(reader.getFloat32(vertexstart, true));
+                        vertices.push(reader.getFloat32(vertexstart + 4, true));
+                        vertices.push(reader.getFloat32(vertexstart + 8, true));
+                        normals.push(normalX, normalY, normalZ);
+                    }
+                }
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+                geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+                return geometry;
+            }
+            parseASCII(data) {
+                const text = new TextDecoder().decode(data);
+                const geometry = new THREE.BufferGeometry();
+                const vertices = [];
+                const normals = [];
+                const lines = text.split('\n');
+                let currentNormal = new THREE.Vector3();
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (line.startsWith('facet normal')) {
+                        const parts = line.split(/\s+/);
+                        currentNormal.set(parseFloat(parts[2]), parseFloat(parts[3]), parseFloat(parts[4]));
+                    } else if (line.startsWith('vertex')) {
+                        const parts = line.split(/\s+/);
+                        vertices.push(parseFloat(parts[1]), parseFloat(parts[2]), parseFloat(parts[3]));
+                        normals.push(currentNormal.x, currentNormal.y, currentNormal.z);
+                    }
+                }
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+                geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+                return geometry;
+            }
+        }
+        
+        // OrbitControls
+        class OrbitControls extends THREE.EventDispatcher {
+            constructor(object, domElement) {
+                super();
+                this.object = object;
+                this.domElement = domElement;
+                this.enableDamping = false;
+                this.dampingFactor = 0.05;
+                this.minDistance = 0;
+                this.maxDistance = Infinity;
+                this.minPolarAngle = 0;
+                this.maxPolarAngle = Math.PI;
+                this.enableZoom = true;
+                this.enableRotate = true;
+                this.enablePan = true;
+                this.autoRotate = false;
+                this.autoRotateSpeed = 2.0;
+                this.keys = { LEFT: 'ArrowLeft', UP: 'ArrowUp', RIGHT: 'ArrowRight', BOTTOM: 'ArrowDown' };
+                this.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+                this.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+                this.target = new THREE.Vector3();
+                this.spherical = new THREE.Spherical();
+                this.sphericalDelta = new THREE.Spherical();
+                this.scale = 1;
+                this.panOffset = new THREE.Vector3();
+                this.zoomChanged = false;
+                this.rotateStart = new THREE.Vector2();
+                this.rotateEnd = new THREE.Vector2();
+                this.rotateDelta = new THREE.Vector2();
+                this.panStart = new THREE.Vector2();
+                this.panEnd = new THREE.Vector2();
+                this.panDelta = new THREE.Vector2();
+                this.dollyStart = new THREE.Vector2();
+                this.dollyEnd = new THREE.Vector2();
+                this.dollyDelta = new THREE.Vector2();
+                this.update();
+                this.connect();
+            }
+            connect() {
+                this.domElement.addEventListener('contextmenu', this.onContextMenu);
+                this.domElement.addEventListener('mousedown', this.onMouseDown);
+                this.domElement.addEventListener('wheel', this.onMouseWheel);
+                this.domElement.addEventListener('touchstart', this.onTouchStart);
+                this.domElement.addEventListener('touchend', this.onTouchEnd);
+                this.domElement.addEventListener('touchmove', this.onTouchMove);
+                window.addEventListener('keydown', this.onKeyDown);
+            }
+            disconnect() {
+                this.domElement.removeEventListener('contextmenu', this.onContextMenu);
+                this.domElement.removeEventListener('mousedown', this.onMouseDown);
+                this.domElement.removeEventListener('wheel', this.onMouseWheel);
+                this.domElement.removeEventListener('touchstart', this.onTouchStart);
+                this.domElement.removeEventListener('touchend', this.onTouchEnd);
+                this.domElement.removeEventListener('touchmove', this.onTouchMove);
+                window.removeEventListener('keydown', this.onKeyDown);
+            }
+            onContextMenu = (event) => { event.preventDefault(); }
+            onMouseDown = (event) => {
+                if (!this.enabled) return;
+                if (event.button === this.mouseButtons.LEFT) {
+                    this.rotateStart.set(event.clientX, event.clientY);
+                    this.domElement.addEventListener('mousemove', this.onMouseMove);
+                    this.domElement.addEventListener('mouseup', this.onMouseUp);
+                } else if (event.button === this.mouseButtons.MIDDLE) {
+                    this.dollyStart.set(event.clientX, event.clientY);
+                    this.domElement.addEventListener('mousemove', this.onMouseMove);
+                    this.domElement.addEventListener('mouseup', this.onMouseUp);
+                } else if (event.button === this.mouseButtons.RIGHT) {
+                    this.panStart.set(event.clientX, event.clientY);
+                    this.domElement.addEventListener('mousemove', this.onMouseMove);
+                    this.domElement.addEventListener('mouseup', this.onMouseUp);
+                }
+            }
+            onMouseMove = (event) => {
+                if (!this.enabled) return;
+                if (event.buttons === 1) {
+                    this.rotateEnd.set(event.clientX, event.clientY);
+                    this.rotateDelta.subVectors(this.rotateEnd, this.rotateStart);
+                    this.rotateLeft(2 * Math.PI * this.rotateDelta.x / this.domElement.clientWidth);
+                    this.rotateUp(2 * Math.PI * this.rotateDelta.y / this.domElement.clientHeight);
+                    this.rotateStart.copy(this.rotateEnd);
+                } else if (event.buttons === 4) {
+                    this.dollyEnd.set(event.clientX, event.clientY);
+                    this.dollyDelta.subVectors(this.dollyEnd, this.dollyStart);
+                    if (this.dollyDelta.y > 0) this.dollyOut(this.getZoomScale());
+                    else if (this.dollyDelta.y < 0) this.dollyIn(this.getZoomScale());
+                    this.dollyStart.copy(this.dollyEnd);
+                } else if (event.buttons === 2) {
+                    this.panEnd.set(event.clientX, event.clientY);
+                    this.panDelta.subVectors(this.panEnd, this.panStart);
+                    this.pan(this.panDelta.x, this.panDelta.y);
+                    this.panStart.copy(this.panEnd);
+                }
+            }
+            onMouseUp = () => {
+                this.domElement.removeEventListener('mousemove', this.onMouseMove);
+                this.domElement.removeEventListener('mouseup', this.onMouseUp);
+            }
+            onMouseWheel = (event) => {
+                if (!this.enabled || !this.enableZoom) return;
+                event.preventDefault();
+                if (event.deltaY < 0) this.dollyIn(this.getZoomScale());
+                else if (event.deltaY > 0) this.dollyOut(this.getZoomScale());
+                this.update();
+            }
+            onTouchStart = (event) => {
+                if (!this.enabled) return;
+                if (event.touches.length === 1) {
+                    this.rotateStart.set(event.touches[0].pageX, event.touches[0].pageY);
+                } else if (event.touches.length === 2) {
+                    const dx = event.touches[0].pageX - event.touches[1].pageX;
+                    const dy = event.touches[0].pageY - event.touches[1].pageY;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    this.dollyStart.set(0, distance);
+                }
+            }
+            onTouchMove = (event) => {
+                if (!this.enabled) return;
+                if (event.touches.length === 1) {
+                    this.rotateEnd.set(event.touches[0].pageX, event.touches[0].pageY);
+                    this.rotateDelta.subVectors(this.rotateEnd, this.rotateStart);
+                    this.rotateLeft(2 * Math.PI * this.rotateDelta.x / this.domElement.clientWidth);
+                    this.rotateUp(2 * Math.PI * this.rotateDelta.y / this.domElement.clientHeight);
+                    this.rotateStart.copy(this.rotateEnd);
+                } else if (event.touches.length === 2) {
+                    const dx = event.touches[0].pageX - event.touches[1].pageX;
+                    const dy = event.touches[0].pageY - event.touches[1].pageY;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    this.dollyEnd.set(0, distance);
+                    this.dollyDelta.set(0, Math.pow(this.dollyEnd.y / this.dollyStart.y, 1));
+                    this.dollyOut(this.dollyDelta.y);
+                    this.dollyStart.copy(this.dollyEnd);
+                }
+            }
+            onTouchEnd = () => {}
+            onKeyDown = (event) => {
+                if (!this.enabled) return;
+                switch (event.code) {
+                    case this.keys.UP: this.pan(0, 10); this.update(); break;
+                    case this.keys.BOTTOM: this.pan(0, -10); this.update(); break;
+                    case this.keys.LEFT: this.pan(10, 0); this.update(); break;
+                    case this.keys.RIGHT: this.pan(-10, 0); this.update(); break;
+                }
+            }
+            getZoomScale() { return Math.pow(0.95, 1); }
+            rotateLeft(angle) { this.sphericalDelta.theta -= angle; }
+            rotateUp(angle) { this.sphericalDelta.phi -= angle; }
+            panLeft(distance, objectMatrix) {
+                const v = new THREE.Vector3();
+                v.setFromMatrixColumn(objectMatrix, 0);
+                v.multiplyScalar(-distance);
+                this.panOffset.add(v);
+            }
+            panUp(distance, objectMatrix) {
+                const v = new THREE.Vector3();
+                v.setFromMatrixColumn(objectMatrix, 1);
+                v.multiplyScalar(distance);
+                this.panOffset.add(v);
+            }
+            pan(deltaX, deltaY) {
+                const element = this.domElement;
+                const offset = new THREE.Vector3();
+                offset.setFromMatrixPosition(this.object.matrixWorld);
+                const quat = new THREE.Quaternion().setFromUnitVectors(this.object.up, new THREE.Vector3(0, 1, 0));
+                const panLeft = new THREE.Vector3();
+                const panUp = new THREE.Vector3();
+                panLeft.setFromMatrixColumn(this.object.matrix, 0);
+                panLeft.applyQuaternion(quat);
+                panUp.setFromMatrixColumn(this.object.matrix, 1);
+                panUp.applyQuaternion(quat);
+                panLeft.multiplyScalar(deltaX * 0.01);
+                panUp.multiplyScalar(deltaY * 0.01);
+                this.panOffset.add(panLeft);
+                this.panOffset.add(panUp);
+            }
+            dollyIn(dollyScale) {
+                if (this.object.isPerspectiveCamera) {
+                    this.scale /= dollyScale;
+                } else if (this.object.isOrthographicCamera) {
+                    this.object.zoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.object.zoom * dollyScale));
+                    this.object.updateProjectionMatrix();
+                    this.zoomChanged = true;
+                }
+            }
+            dollyOut(dollyScale) {
+                if (this.object.isPerspectiveCamera) {
+                    this.scale *= dollyScale;
+                } else if (this.object.isOrthographicCamera) {
+                    this.object.zoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.object.zoom / dollyScale));
+                    this.object.updateProjectionMatrix();
+                    this.zoomChanged = true;
+                }
+            }
+            update() {
+                const offset = new THREE.Vector3();
+                offset.copy(this.object.position).sub(this.target);
+                this.spherical.setFromVector3(offset);
+                this.spherical.theta += this.sphericalDelta.theta;
+                this.spherical.phi += this.sphericalDelta.phi;
+                this.spherical.phi = Math.max(this.minPolarAngle, Math.min(this.maxPolarAngle, this.spherical.phi));
+                this.spherical.makeSafe();
+                this.spherical.radius *= this.scale;
+                this.spherical.radius = Math.max(this.minDistance, Math.min(this.maxDistance, this.spherical.radius));
+                this.target.add(this.panOffset);
+                this.object.position.setFromSpherical(this.spherical);
+                this.object.position.add(this.target);
+                this.object.lookAt(this.target);
+                if (this.enableDamping) {
+                    this.sphericalDelta.theta *= (1 - this.dampingFactor);
+                    this.sphericalDelta.phi *= (1 - this.dampingFactor);
+                    this.panOffset.multiplyScalar(1 - this.dampingFactor);
+                } else {
+                    this.sphericalDelta.set(0, 0, 0);
+                    this.panOffset.set(0, 0, 0);
+                }
+                this.scale = 1;
+                if (this.zoomChanged || this.panOffset.lengthSq() > 0.000001 || this.sphericalDelta.theta !== 0 || this.sphericalDelta.phi !== 0) {
+                    this.dispatchEvent({ type: 'change' });
+                    this.zoomChanged = false;
+                }
+            }
+            reset() {
+                this.target.set(0, 0, 0);
+                this.object.position.set(0, 0, 5);
+                this.object.up.set(0, 1, 0);
+                this.object.lookAt(this.target);
+                this.update();
+            }
+        }
+        THREE.OrbitControls = OrbitControls;
+        THREE.STLLoader = STLLoader;
+    </script>
+    <script src="/static/app.js"></script>
+</body>
+</html>
+
