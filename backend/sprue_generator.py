@@ -86,6 +86,9 @@ class SprueGenerator:
             # Передаем исходный меш для правильного определения внутренней стороны
             part_mesh = self._orient_part_for_largest_contact_area(part_mesh, original_mesh)
             
+            # Дополнительно оптимизируем ориентацию для максимального контакта с плоскостью
+            part_mesh = self._optimize_contact_with_plane(part_mesh, original_mesh)
+            
             # Перемещаем деталь так, чтобы она лежала на плоскости Z=0
             # Находим минимальную Z координату
             min_z = part_mesh.bounds[0][2]
@@ -269,6 +272,145 @@ class SprueGenerator:
             logger.debug(f"Ошибка при определении внутренней стороны: {e}")
             return np.array([0, 0, -1])
     
+    def _optimize_contact_with_plane(self, mesh: trimesh.Trimesh, original_mesh: trimesh.Trimesh = None) -> trimesh.Trimesh:
+        """
+        Быстро оптимизирует ориентацию детали для максимального контакта с плоскостью
+        
+        Использует быстрый метод через scipy для вычисления площади контакта.
+        Пробует только несколько ключевых поворотов для ускорения.
+        
+        Args:
+            mesh: Меш детали (уже повернутый для максимальной площади проекции)
+            original_mesh: Исходный меш для определения внутренней стороны
+            
+        Returns:
+            Оптимизированный меш
+        """
+        try:
+            from scipy.spatial import ConvexHull
+            
+            # Быстро вычисляем текущую площадь контакта через нижние грани
+            current_contact_area = self._fast_contact_area(mesh)
+            
+            # Пробуем только несколько ключевых поворотов (уменьшено для скорости)
+            test_angles = [-np.pi/12, np.pi/12]  # Только ±15°
+            test_axes = [[1, 0, 0], [0, 1, 0]]  # Вокруг X и Y
+            
+            best_mesh = mesh
+            best_contact_area = current_contact_area
+            
+            # Определяем внутреннюю сторону один раз (если нужно)
+            inner_direction = None
+            if original_mesh is not None:
+                inner_direction = self._determine_inner_side(mesh, original_mesh)
+            
+            for axis in test_axes:
+                for angle in test_angles:
+                    try:
+                        # Создаем небольшой поворот
+                        rotation_matrix = trimesh.transformations.rotation_matrix(angle, axis)
+                        test_mesh = mesh.copy()
+                        test_mesh.apply_transform(rotation_matrix)
+                        
+                        # Быстро вычисляем площадь контакта
+                        contact_area = self._fast_contact_area(test_mesh)
+                        
+                        # Быстрая проверка внутренней стороны (без пересчета)
+                        is_valid = True
+                        if inner_direction is not None:
+                            rotation_3x3 = rotation_matrix[:3, :3]
+                            rotated_inner = rotation_3x3 @ inner_direction
+                            rotated_inner = rotated_inner / np.linalg.norm(rotated_inner)
+                            if rotated_inner[2] > -0.2:
+                                is_valid = False
+                        
+                        if is_valid and contact_area > best_contact_area * 1.02:  # Улучшение минимум на 2%
+                            best_contact_area = contact_area
+                            best_mesh = test_mesh
+                            
+                    except Exception as e:
+                        logger.debug(f"Ошибка при оптимизации контакта: {e}")
+                        continue
+            
+            if best_mesh is not mesh:
+                logger.debug(f"Контакт с плоскостью улучшен: {current_contact_area:.2f} -> {best_contact_area:.2f} мм²")
+            
+            return best_mesh
+            
+        except Exception as e:
+            logger.debug(f"Ошибка при оптимизации контакта с плоскостью: {e}")
+            return mesh
+    
+    def _fast_contact_area(self, mesh: trimesh.Trimesh, plane_z: float = 0.0, tolerance: float = 0.5) -> float:
+        """
+        Быстро вычисляет площадь контакта детали с плоскостью через scipy
+        
+        Использует оптимизированный метод с ConvexHull для быстрого вычисления.
+        
+        Args:
+            mesh: Меш детали
+            plane_z: Z координата плоскости (по умолчанию 0.0)
+            tolerance: Допустимое расстояние от плоскости (мм)
+            
+        Returns:
+            Площадь контакта в мм²
+        """
+        try:
+            from scipy.spatial import ConvexHull
+            
+            # Получаем нижние грани (быстрый метод через нормали и Z координаты)
+            face_centers = mesh.triangles_center
+            face_normals = mesh.face_normals
+            
+            # Нижние грани: центр близко к плоскости И нормаль направлена вверх
+            lower_faces = (np.abs(face_centers[:, 2] - plane_z) < tolerance) & (face_normals[:, 2] > 0.5)
+            
+            if np.sum(lower_faces) == 0:
+                # Если нет нижних граней, используем все грани близко к плоскости
+                lower_faces = np.abs(face_centers[:, 2] - plane_z) < tolerance
+            
+            if np.sum(lower_faces) == 0:
+                # Fallback: используем bounding box
+                bounds = mesh.bounds
+                return (bounds[1][0] - bounds[0][0]) * (bounds[1][1] - bounds[0][1])
+            
+            # Собираем все вершины нижних граней
+            lower_face_indices = np.where(lower_faces)[0]
+            lower_vertices_3d = []
+            
+            for face_idx in lower_face_indices[:min(100, len(lower_face_indices))]:  # Ограничиваем для скорости
+                face = mesh.faces[face_idx]
+                lower_vertices_3d.extend(mesh.vertices[face])
+            
+            if len(lower_vertices_3d) < 3:
+                bounds = mesh.bounds
+                return (bounds[1][0] - bounds[0][0]) * (bounds[1][1] - bounds[0][1])
+            
+            # Проектируем на плоскость XY
+            lower_vertices_2d = np.array([v[:2] for v in lower_vertices_3d])
+            
+            # Удаляем дубликаты через округление
+            rounded = np.round(lower_vertices_2d / tolerance) * tolerance
+            unique_points = np.unique(rounded, axis=0)
+            
+            if len(unique_points) < 3:
+                bounds = mesh.bounds
+                return (bounds[1][0] - bounds[0][0]) * (bounds[1][1] - bounds[0][1])
+            
+            # Быстро вычисляем выпуклую оболочку
+            try:
+                hull = ConvexHull(unique_points)
+                return hull.volume  # Для 2D это площадь
+            except:
+                # Fallback: используем bounding box
+                bounds = mesh.bounds
+                return (bounds[1][0] - bounds[0][0]) * (bounds[1][1] - bounds[0][1])
+            
+        except Exception as e:
+            logger.debug(f"Ошибка при быстром вычислении площади контакта: {e}")
+            # Fallback: используем bounding box
+            bounds = mesh.bounds
+            return (bounds[1][0] - bounds[0][0]) * (bounds[1][1] - bounds[0][1])
     
     def _pack_parts_into_frames(self, parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
