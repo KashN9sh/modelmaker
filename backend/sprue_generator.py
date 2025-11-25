@@ -583,7 +583,7 @@ class SprueGenerator:
                 
                 # Извлекаем часть меша
                 mask = ((mesh.vertices[:, 0] >= x_min) & (mesh.vertices[:, 0] < x_max) &
-                       (mesh.vertices[:, 1] >= y_min) & (mesh.vertices[:, 1] < y_max))
+                        (mesh.vertices[:, 1] >= y_min) & (mesh.vertices[:, 1] < y_max))
                 
                 if np.sum(mask) > 0:
                     # Находим грани, все вершины которых в этой части
@@ -600,15 +600,125 @@ class SprueGenerator:
                         
                         part_mesh = trimesh.Trimesh(vertices=new_vertices, faces=new_faces)
                         
-                        cut_parts.append({
-                            "id": f"{part_id_base}_{i}_{j}",
-                            "mesh": part_mesh,
-                            "center": part_mesh.centroid.tolist(),
-                            "bounds": part_mesh.bounds.tolist()
-                        })
+                        # Проверяем, состоит ли часть из нескольких несвязанных компонентов
+                        # Если да, разделяем на отдельные детали
+                        components = self._split_into_components(part_mesh)
+                        
+                        if len(components) > 1:
+                            # Разделяем на отдельные детали
+                            for comp_idx, component in enumerate(components):
+                                if len(component.faces) < 10:  # Пропускаем очень маленькие
+                                    continue
+                                cut_parts.append({
+                                    "id": f"{part_id_base}_{i}_{j}_c{comp_idx}",
+                                    "mesh": component,
+                                    "center": component.centroid.tolist(),
+                                    "bounds": component.bounds.tolist()
+                                })
+                        else:
+                            # Один компонент - добавляем как есть
+                            cut_parts.append({
+                                "id": f"{part_id_base}_{i}_{j}",
+                                "mesh": part_mesh,
+                                "center": part_mesh.centroid.tolist(),
+                                 "bounds": part_mesh.bounds.tolist()
+                             })
         
         logger.info(f"Деталь {part['id']} разрезана на {len(cut_parts)} частей")
         return cut_parts if len(cut_parts) > 0 else [part]
+    
+    def _split_into_components(self, mesh: trimesh.Trimesh) -> List[trimesh.Trimesh]:
+        """
+        Разделяет меш на связанные компоненты используя scipy для эффективности
+        
+        Использует граф смежности для определения связанных компонентов.
+        
+        Args:
+            mesh: Меш для разделения
+            
+        Returns:
+            Список связанных компонентов
+        """
+        try:
+            from scipy.sparse import csr_matrix
+            from scipy.sparse.csgraph import connected_components
+            
+            if len(mesh.faces) == 0:
+                return [mesh]
+            
+            # Строим граф смежности: вершины связаны, если они принадлежат одной грани
+            num_vertices = len(mesh.vertices)
+            
+            # Создаем матрицу смежности через грани
+            # Для каждой грани связываем все три вершины друг с другом
+            rows = []
+            cols = []
+            
+            for face in mesh.faces:
+                # Связываем вершины грани попарно
+                for i in range(3):
+                    for j in range(i + 1, 3):
+                        rows.append(face[i])
+                        cols.append(face[j])
+                        rows.append(face[j])
+                        cols.append(face[i])
+            
+            # Создаем разреженную матрицу смежности
+            data = np.ones(len(rows), dtype=bool)
+            adjacency = csr_matrix((data, (rows, cols)), shape=(num_vertices, num_vertices))
+            
+            # Находим связанные компоненты
+            n_components, labels = connected_components(
+                csgraph=adjacency, 
+                directed=False, 
+                return_labels=True
+            )
+            
+            if n_components == 1:
+                # Один компонент - возвращаем как есть
+                return [mesh]
+            
+            # Разделяем на компоненты
+            components = []
+            for comp_id in range(n_components):
+                # Находим вершины этого компонента
+                vertex_mask = labels == comp_id
+                vertex_indices = np.where(vertex_mask)[0]
+                
+                if len(vertex_indices) == 0:
+                    continue
+                
+                # Находим грани, все вершины которых принадлежат этому компоненту
+                face_mask = np.all([np.isin(face, vertex_indices) for face in mesh.faces], axis=1)
+                
+                if np.sum(face_mask) < 10:  # Пропускаем очень маленькие компоненты
+                    continue
+                
+                # Создаем новый меш для этого компонента
+                comp_faces = mesh.faces[face_mask]
+                used_vertices = np.unique(comp_faces.flatten())
+                vertex_map = {old: new for new, old in enumerate(used_vertices)}
+                new_faces = np.array([[vertex_map[v] for v in face] for face in comp_faces])
+                new_vertices = mesh.vertices[used_vertices]
+                
+                try:
+                    comp_mesh = trimesh.Trimesh(vertices=new_vertices, faces=new_faces)
+                    if len(comp_mesh.faces) > 0:
+                        components.append(comp_mesh)
+                except Exception as e:
+                    logger.debug(f"Ошибка при создании компонента {comp_id}: {e}")
+                    continue
+            
+            return components if len(components) > 0 else [mesh]
+            
+        except Exception as e:
+            logger.debug(f"Ошибка при разделении на компоненты: {e}, используем trimesh.split()")
+            # Fallback: используем встроенный метод trimesh
+            try:
+                split_meshes = mesh.split(only_watertight=False)
+                return [m for m in split_meshes if len(m.faces) >= 10]
+            except:
+                return [mesh]
     
     def _create_sprue_with_gates(self, frame_parts: List[Dict[str, Any]], frame_id: int) -> Dict[str, Any]:
         """
