@@ -61,6 +61,7 @@ class SprueGenerator:
     def _flatten_parts_to_plane(self, segments: List[Dict[str, Any]], wall_thickness: float) -> List[Dict[str, Any]]:
         """
         Раскладывает все детали в одной плоскости (Z=0), как слайсеры для 3D печати
+        Автоматически поворачивает детали для максимальной площади контакта с плоскостью
         
         Args:
             segments: Список сегментов модели
@@ -73,12 +74,17 @@ class SprueGenerator:
         
         for seg in segments:
             part_mesh = seg["mesh"].copy()
+            original_mesh = seg["mesh"].copy()  # Сохраняем исходный меш для определения внутренней стороны
             
             # Добавляем толщину к детали
             try:
                 part_mesh = self.thickener.add_thickness(part_mesh, wall_thickness)
             except Exception as e:
                 logger.warning(f"Не удалось добавить толщину к детали {seg['id']}: {e}")
+            
+            # Находим оптимальную ориентацию для максимальной площади контакта
+            # Передаем исходный меш для правильного определения внутренней стороны
+            part_mesh = self._orient_part_for_largest_contact_area(part_mesh, original_mesh)
             
             # Перемещаем деталь так, чтобы она лежала на плоскости Z=0
             # Находим минимальную Z координату
@@ -95,6 +101,174 @@ class SprueGenerator:
             })
         
         return flattened_parts
+    
+    def _orient_part_for_largest_contact_area(self, mesh: trimesh.Trimesh, original_mesh: trimesh.Trimesh = None) -> trimesh.Trimesh:
+        """
+        Поворачивает деталь так, чтобы она лежала наибольшей площадью на плоскости
+        и внутренняя оболочка была внизу
+        
+        Использует быстрый метод: пробует только основные ориентации (6 сторон куба)
+        и выбирает ту, где площадь проекции максимальна и внутренняя сторона внизу.
+        
+        Args:
+            mesh: Меш детали (уже с толщиной)
+            original_mesh: Исходный меш (до добавления толщины) для определения внутренней стороны
+            
+        Returns:
+            Повернутый меш
+        """
+        # Определяем направление внутренней стороны (используя scipy для эффективности)
+        inner_direction = self._determine_inner_side(mesh, original_mesh)
+        
+        # Быстрый метод: пробуем только 6 основных ориентаций (стороны куба)
+        test_orientations = [
+            # Оригинальная ориентация (без поворота)
+            None,
+            # Повороты вокруг X на 90 и 270 градусов
+            (np.pi/2, [1, 0, 0]),
+            (3*np.pi/2, [1, 0, 0]),
+            # Повороты вокруг Y на 90 и 270 градусов
+            (np.pi/2, [0, 1, 0]),
+            (3*np.pi/2, [0, 1, 0]),
+            # Поворот вокруг X на 180 (переворот)
+            (np.pi, [1, 0, 0]),
+        ]
+        
+        best_mesh = mesh
+        best_score = -1.0
+        
+        # Вычисляем оценку для каждой ориентации
+        for rotation_params in test_orientations:
+            try:
+                if rotation_params is None:
+                    # Без поворота
+                    test_mesh = mesh
+                    rotated_inner_direction = inner_direction
+                else:
+                    angle, axis = rotation_params
+                    rotation_matrix = trimesh.transformations.rotation_matrix(angle, axis)
+                    test_mesh = mesh.copy()
+                    test_mesh.apply_transform(rotation_matrix)
+                    # Поворачиваем направление внутренней стороны (используем только вращательную часть 3x3)
+                    rotation_3x3 = rotation_matrix[:3, :3]
+                    rotated_inner_direction = rotation_3x3 @ inner_direction
+                    rotated_inner_direction = rotated_inner_direction / np.linalg.norm(rotated_inner_direction)
+                
+                # Быстро вычисляем площадь проекции через bounding box
+                bounds = test_mesh.bounds
+                projection_area = (bounds[1][0] - bounds[0][0]) * (bounds[1][1] - bounds[0][1])
+                
+                # Проверяем, направлена ли внутренняя сторона вниз (Z отрицательное)
+                is_inner_down = rotated_inner_direction[2] < -0.3  # Порог для определения "вниз"
+                
+                # Оценка: площадь проекции + бонус если внутренняя сторона внизу
+                score = projection_area
+                if is_inner_down:
+                    score *= 1.15  # Бонус 15% за правильную ориентацию внутренней стороны
+                
+                if score > best_score:
+                    best_score = score
+                    if rotation_params is None:
+                        best_mesh = mesh
+                    else:
+                        best_mesh = test_mesh
+                        
+            except Exception as e:
+                logger.debug(f"Ошибка при повороте детали: {e}")
+                continue
+        
+        # Если нашли лучшую ориентацию, возвращаем повернутый меш
+        if best_mesh is not mesh:
+            bounds = best_mesh.bounds
+            projection_area = (bounds[1][0] - bounds[0][0]) * (bounds[1][1] - bounds[0][1])
+            logger.debug(f"Деталь повернута, площадь проекции: {projection_area:.2f} мм²")
+            return best_mesh
+        else:
+            return mesh
+    
+    def _determine_inner_side(self, mesh: trimesh.Trimesh, original_mesh: trimesh.Trimesh = None) -> np.ndarray:
+        """
+        Определяет направление внутренней стороны детали (оболочки)
+        
+        Внутренняя сторона оболочки - это та, где была исходная модель.
+        Использует scipy.spatial.cKDTree для быстрого поиска ближайших точек.
+        
+        Args:
+            mesh: Меш детали (оболочка с толщиной)
+            original_mesh: Исходный меш (до добавления толщины)
+            
+        Returns:
+            Направление внутренней стороны (вектор нормали, указывающий вниз для внутренней стороны)
+        """
+        try:
+            from scipy.spatial import cKDTree
+            
+            if original_mesh is None:
+                # Если нет исходного меша, используем направление по умолчанию
+                return np.array([0, 0, -1])
+            
+            # Используем scipy для быстрого поиска ближайших точек
+            tree = cKDTree(original_mesh.vertices)
+            
+            # Получаем центры граней оболочки
+            face_centers = mesh.triangles_center
+            face_normals = mesh.face_normals
+            
+            # Находим ближайшие точки исходного меша для каждой грани
+            distances, closest_indices = tree.query(face_centers)
+            closest_points = original_mesh.vertices[closest_indices]
+            
+            # Вычисляем векторы от ближайших точек исходного меша к центрам граней оболочки
+            vectors_from_surface = face_centers - closest_points
+            
+            # Нормализуем векторы
+            norms = np.linalg.norm(vectors_from_surface, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            vectors_from_surface_normalized = vectors_from_surface / norms
+            
+            # Внутренние грани: нормали направлены К исходному мешу (положительное скалярное произведение)
+            # Но из-за того, как создается оболочка, внутренние грани могут иметь инвертированные нормали
+            # Поэтому проверяем расстояние - внутренние грани должны быть ближе к исходному мешу
+            dot_products = np.sum(face_normals * vectors_from_surface_normalized, axis=1)
+            
+            # Внутренние грани: близко к поверхности И нормали направлены к поверхности
+            # Используем порог расстояния (нижние 50% по расстоянию)
+            distance_threshold = np.percentile(distances, 50)
+            inner_faces = (distances < distance_threshold) & (dot_products > -0.3)
+            
+            if np.sum(inner_faces) < len(face_normals) * 0.1:
+                # Если слишком мало внутренних граней, используем более мягкий критерий
+                inner_faces = distances < distance_threshold
+            
+            if np.sum(inner_faces) > 0:
+                # Вычисляем среднее направление нормалей внутренних граней
+                inner_normals = face_normals[inner_faces]
+                
+                # Внутренние грани должны иметь нормали, направленные к исходному мешу
+                # Но для определения "вниз" нам нужно направление, противоположное нормалям
+                inner_direction = -np.mean(inner_normals, axis=0)
+                
+                # Нормализуем
+                norm = np.linalg.norm(inner_direction)
+                if norm > 1e-6:
+                    inner_direction = inner_direction / norm
+                else:
+                    inner_direction = np.array([0, 0, -1])
+                
+                # Внутренняя сторона должна указывать вниз (Z отрицательное)
+                if inner_direction[2] > 0:
+                    inner_direction = -inner_direction
+                
+                logger.debug(f"Определена внутренняя сторона: {inner_direction}, внутренних граней: {np.sum(inner_faces)}/{len(face_normals)}")
+                return inner_direction
+            else:
+                logger.debug("Не удалось определить внутренние грани, используем направление по умолчанию")
+                return np.array([0, 0, -1])
+                
+        except Exception as e:
+            logger.debug(f"Ошибка при определении внутренней стороны: {e}")
+            return np.array([0, 0, -1])
+    
     
     def _pack_parts_into_frames(self, parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
